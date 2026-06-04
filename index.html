@@ -363,9 +363,6 @@
             margin-top: 15px;
             display: inline-block;
         }
-        hr {
-            margin: 20px 0;
-        }
     </style>
 </head>
 <body>
@@ -409,7 +406,9 @@
         return JSON.parse(raw);
     }
     
-    function saveUsers(users) { localStorage.setItem(STORAGE_USERS, JSON.stringify(users)); }
+    function saveUsers(users) { 
+        localStorage.setItem(STORAGE_USERS, JSON.stringify(users)); 
+    }
     
     function getCurrentUser() {
         const curr = localStorage.getItem(STORAGE_CURRENT_USER);
@@ -422,7 +421,10 @@
     }
     
     function setCurrentUser(user) {
-        if (!user) { localStorage.removeItem(STORAGE_CURRENT_USER); return; }
+        if (!user) { 
+            localStorage.removeItem(STORAGE_CURRENT_USER); 
+            return; 
+        }
         localStorage.setItem(STORAGE_CURRENT_USER, JSON.stringify({ id: user.id, username: user.username }));
     }
     
@@ -462,7 +464,13 @@
                     m.partnerId === user.id && 
                     m.theirSkillId === skill.id
                 );
-                if (!alreadyRequested) {
+                // Also don't show if already confirmed match
+                const alreadyConfirmed = matchesStore.some(m => 
+                    m.status === 'confirmed' && 
+                    ((m.partnerId === user.id && m.theirSkillId === skill.id) ||
+                     (m.is_sender === false && m.yourSkillId === skill.id))
+                );
+                if (!alreadyRequested && !alreadyConfirmed) {
                     skills.push({
                         id: `${user.id}_${skill.id}`,
                         skillId: skill.id,
@@ -488,6 +496,10 @@
         if (user) {
             const allUsers = loadUsers();
             availableSkillsCache = getAvailableSkills(user.id, allUsers);
+            // Reset index if needed
+            if (currentSwipeIndex >= availableSkillsCache.length && availableSkillsCache.length > 0) {
+                currentSwipeIndex = 0;
+            }
         }
     }
     
@@ -512,16 +524,18 @@
             return;
         }
         if (!availableSkillsCache.length) {
-            container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h3>✨ No skills available</h3><p>Other users haven't added skills yet. Check back later!</p></div></div>`;
+            container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h3>✨ No skills available</h3><p>Other users haven't added skills yet. Check back later!</p><p style="margin-top:15px">💡 Tip: Create another account to test swapping!</p></div></div>`;
             return;
         }
         const skill = availableSkillsCache[currentSwipeIndex % availableSkillsCache.length];
-        container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h2 style="margin-bottom:15px">${escapeHtml(skill.title)}</h2><span class="skill-category">${escapeHtml(skill.category)}</span><p style="margin-top:20px">${escapeHtml(skill.description)}</p><div style="margin-top:20px; padding-top:20px; border-top:1px solid rgba(0,0,0,0.1)"><p>👤 Offered by: ${escapeHtml(skill.user.username)}</p><p>⭐ Reputation: ${skill.user.reputation}</p></div></div><div class="swipe-actions"><button class="swipe-btn no" onclick="handlePass()">👎 Pass</button><button class="swipe-btn yes" onclick="handleSwipe('${skill.id}')">👍 Interested</button></div></div>`;
+        container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h2 style="margin-bottom:15px">🎯 ${escapeHtml(skill.title)}</h2><span class="skill-category">${escapeHtml(skill.category)}</span><p style="margin-top:20px">${escapeHtml(skill.description)}</p><div style="margin-top:20px; padding-top:20px; border-top:1px solid rgba(0,0,0,0.1)"><p>👤 Offered by: ${escapeHtml(skill.user.username)}</p><p>⭐ Reputation: ${skill.user.reputation}</p></div></div><div class="swipe-actions"><button class="swipe-btn no" onclick="handlePass()">👎 Pass</button><button class="swipe-btn yes" onclick="handleSwipe('${skill.id}')">👍 I Want to Learn This</button></div></div>`;
     }
     
     function handlePass() { 
-        currentSwipeIndex = (currentSwipeIndex + 1) % availableSkillsCache.length; 
-        renderSwipeTab(); 
+        if (availableSkillsCache.length > 0) {
+            currentSwipeIndex = (currentSwipeIndex + 1) % availableSkillsCache.length; 
+            renderSwipeTab();
+        }
     }
     
     function handleSwipe(skillId) {
@@ -562,7 +576,7 @@
             let receiverMatches = JSON.parse(localStorage.getItem(receiverMatchesKey) || '[]');
             
             // Check if already exists
-            const exists = receiverMatches.some(m => m.partnerId === currentUser.id && m.theirSkillId === yourSkill.id);
+            const exists = receiverMatches.some(m => m.id === newMatch.id);
             if (!exists) {
                 receiverMatches.push({
                     id: newMatch.id,
@@ -583,9 +597,17 @@
         }
         
         showMessage(`✓ Interest sent to ${skill.user.username}! They can accept in their Matches tab.`, 'success');
-        currentSwipeIndex = (currentSwipeIndex + 1) % availableSkillsCache.length;
-        refreshAvailableSkills();
+        
+        // Remove the swiped skill from cache and refresh
+        availableSkillsCache = availableSkillsCache.filter(s => s.id !== skillId);
+        if (availableSkillsCache.length === 0) {
+            currentSwipeIndex = 0;
+        } else if (currentSwipeIndex >= availableSkillsCache.length) {
+            currentSwipeIndex = 0;
+        }
         renderSwipeTab();
+        
+        // Refresh matches tab if it's visible
         if (document.querySelector('.tab.active')?.getAttribute('data-tab') === 'matches') {
             renderMatchesTab();
         }
@@ -599,7 +621,7 @@
         const confirmed = matchesStore.filter(m => m.status === 'confirmed');
         
         if (matchesStore.length === 0) { 
-            container.innerHTML = `<div class="form-container"><h3 style="text-align:center">💕 No matches yet</h3><p style="text-align:center">Swipe on skills you want to learn!</p></div>`; 
+            container.innerHTML = `<div class="form-container"><h3 style="text-align:center">💕 No matches yet</h3><p style="text-align:center">Go to Discover tab and swipe right on skills you want to learn!</p></div>`; 
             return; 
         }
         
@@ -608,7 +630,7 @@
         if(pendingIncoming.length) { 
             html += `<h3 class="section-title" style="color:#ff9f43">📨 Incoming Requests (${pendingIncoming.length})</h3><div class="cards-container">`; 
             pendingIncoming.forEach(m => { 
-                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Awaiting Your Response</span></div><p><strong>${escapeHtml(m.partnerUsername)}</strong> wants to learn your <strong>${escapeHtml(m.yourSkill.title)}</strong> in exchange for teaching you <strong>${escapeHtml(m.theirSkill.title)}</strong></p><div style="margin-top:10px; padding:10px; background:#f8f9fa; border-radius:10px"><p>⭐ Partner reputation: ${m.partnerReputation}</p><p>📧 ${escapeHtml(m.partnerEmail)}</p></div><div class="skill-footer"><button class="btn-success" onclick="confirmMatch(${m.id})">✅ Accept Match</button><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; 
+                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">🎓 ${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Awaiting Your Response</span></div><p><strong>${escapeHtml(m.partnerUsername)}</strong> wants to learn your <strong>${escapeHtml(m.yourSkill.title)}</strong> in exchange for teaching you <strong>${escapeHtml(m.theirSkill.title)}</strong></p><div style="margin-top:10px; padding:10px; background:#f8f9fa; border-radius:10px"><p>⭐ Partner reputation: ${m.partnerReputation}</p><p>📧 ${escapeHtml(m.partnerEmail)}</p></div><div class="skill-footer"><button class="btn-success" onclick="confirmMatch(${m.id})">✅ Accept & Match</button><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; 
             }); 
             html+=`</div>`; 
         }
@@ -616,7 +638,7 @@
         if(pendingOutgoing.length) { 
             html += `<h3 class="section-title" style="color:#667eea">📤 Sent Requests (${pendingOutgoing.length})</h3><div class="cards-container">`; 
             pendingOutgoing.forEach(m => { 
-                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Waiting for Response</span></div><p>You want to learn ${escapeHtml(m.theirSkill.title)} from ${escapeHtml(m.partnerUsername)}</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; 
+                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">🎯 ${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Waiting for Response</span></div><p>You want to learn ${escapeHtml(m.theirSkill.title)} from ${escapeHtml(m.partnerUsername)}</p><p style="margin-top:5px; font-size:14px; color:#666">You offered to teach: ${escapeHtml(m.yourSkill.title)}</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; 
             }); 
             html+=`</div>`; 
         }
@@ -624,7 +646,7 @@
         if(confirmed.length) { 
             html += `<h3 class="section-title" style="color:#51cf66">✅ Confirmed Matches (${confirmed.length})</h3><div class="cards-container">`; 
             confirmed.forEach(m => { 
-                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.yourSkill.title)} ⇄ ${escapeHtml(m.theirSkill.title)}</div><span class="badge confirmed">Confirmed</span></div><p>With ${escapeHtml(m.partnerUsername)} (⭐ ${m.partnerReputation})</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Chat</button><button class="btn-warning" onclick="openSchedule(${m.id})">📅 Schedule</button></div></div>`; 
+                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">🔄 ${escapeHtml(m.yourSkill.title)} ⇄ ${escapeHtml(m.theirSkill.title)}</div><span class="badge confirmed">Confirmed</span></div><p>With ${escapeHtml(m.partnerUsername)} (⭐ ${m.partnerReputation})</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Chat</button><button class="btn-warning" onclick="openSchedule(${m.id})">📅 Schedule Session</button></div></div>`; 
             }); 
             html+=`</div>`; 
         }
@@ -654,6 +676,9 @@
             showMessage('✓ Match confirmed! You can now schedule a session.','success'); 
             renderMatchesTab(); 
             refreshCounters(); 
+            
+            // Refresh available skills to remove matched skills
+            refreshAvailableSkills();
         }
     }
     
@@ -667,9 +692,15 @@
             msgs.forEach(m => { 
                 messagesHtml += `<div class="message-bubble ${m.is_sent ? 'sent' : 'received'}"><div class="message-content">${escapeHtml(m.content)}</div><div style="font-size:10px; margin-top:4px; color:#888">${new Date(m.timestamp).toLocaleTimeString()}</div></div>`; 
             });
+            if (messagesHtml === '') {
+                messagesHtml = '<div style="text-align:center; color:#999; padding:20px">No messages yet. Start the conversation!</div>';
+            }
             const modalHtml = `<div class="modal" onclick="closeModal()"><div class="modal-content" onclick="event.stopPropagation()"><h2>💬 Chat with ${escapeHtml(selectedMatch.partnerUsername)}</h2><div class="chat-container"><div class="chat-messages" id="chatMessages">${messagesHtml}<div id="chatEnd"></div></div><div class="chat-input"><input type="text" id="chatInput" placeholder="Type a message..." onkeypress="if(event.key==='Enter') sendChatMessageCurrent()"><button class="btn-primary" onclick="sendChatMessageCurrent()">Send</button></div></div><button class="btn-primary" onclick="closeModal()" style="background:#999; margin-top:15px">Close</button></div></div>`;
             document.getElementById('modalContainer').innerHTML = modalHtml;
-            setTimeout(() => document.getElementById('chatEnd')?.scrollIntoView({ behavior: 'smooth' }), 50);
+            setTimeout(() => {
+                const end = document.getElementById('chatEnd');
+                if (end) end.scrollIntoView({ behavior: 'smooth' });
+            }, 100);
             
             window.sendChatMessageCurrent = function() {
                 const input = document.getElementById('chatInput');
@@ -688,7 +719,7 @@
     
     function openSchedule(matchId) {
         const match = matchesStore.find(m => m.id === matchId);
-        const modalHtml = `<div class="modal" onclick="closeModal()"><div class="modal-content" onclick="event.stopPropagation()"><h2>📅 Schedule with ${escapeHtml(match.partnerUsername)}</h2><div class="form-group"><label>Date *</label><input type="date" id="scheduleDate"></div><div class="form-group"><label>Time *</label><input type="time" id="scheduleTime"></div><div class="form-group"><label>Location</label><input type="text" id="scheduleLocation" placeholder="Zoom or address"></div><div class="form-group"><label>Notes</label><textarea id="scheduleNotes" rows="2"></textarea></div><div style="display:flex; gap:10px"><button class="btn-success" onclick="scheduleSessionFromModal(${matchId})">✅ Schedule</button><button class="btn-primary" onclick="closeModal()">Cancel</button></div></div></div>`;
+        const modalHtml = `<div class="modal" onclick="closeModal()"><div class="modal-content" onclick="event.stopPropagation()"><h2>📅 Schedule with ${escapeHtml(match.partnerUsername)}</h2><div style="margin-bottom:15px; padding:10px; background:#f0f0f0; border-radius:10px"><p>🤝 You teach: <strong>${escapeHtml(match.yourSkill.title)}</strong></p><p>📚 You learn: <strong>${escapeHtml(match.theirSkill.title)}</strong></p></div><div class="form-group"><label>Date *</label><input type="date" id="scheduleDate"></div><div class="form-group"><label>Time *</label><input type="time" id="scheduleTime"></div><div class="form-group"><label>Location / Meeting Link</label><input type="text" id="scheduleLocation" placeholder="Zoom link, coffee shop, library, etc."></div><div class="form-group"><label>Notes</label><textarea id="scheduleNotes" rows="2" placeholder="What to bring, specific topics..."></textarea></div><div style="display:flex; gap:10px"><button class="btn-success" onclick="scheduleSessionFromModal(${matchId})">✅ Schedule</button><button class="btn-primary" onclick="closeModal()">Cancel</button></div></div></div>`;
         document.getElementById('modalContainer').innerHTML = modalHtml;
     }
     
@@ -710,7 +741,7 @@
             };
             sessionsStore.push(newSession);
             saveUserData(getCurrentUser().id);
-            showMessage('Session scheduled!','success');
+            showMessage('✓ Session scheduled! Check your Sessions tab.','success');
             closeModal();
             refreshAllUserData();
         }
@@ -719,12 +750,12 @@
     function renderSessionsTab() {
         const container = document.getElementById('sessionsTab');
         if(!sessionsStore.length) { 
-            container.innerHTML = `<div class="form-container"><h3>📅 No sessions yet</h3><p>Schedule from confirmed matches!</p></div>`; 
+            container.innerHTML = `<div class="form-container"><h3>📅 No sessions yet</h3><p>Go to your confirmed matches and click "Schedule Session" to set up a meeting!</p></div>`; 
             return; 
         }
-        let html = '<h2 class="section-title">Your Sessions</h2><div class="cards-container">';
+        let html = '<h2 class="section-title">Your Upcoming Sessions</h2><div class="cards-container">';
         sessionsStore.forEach(s => { 
-            html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">With ${escapeHtml(s.partner.username)}</div><span class="badge ${s.status}">${s.status}</span></div><p>🤝 You teach: ${escapeHtml(s.yourSkill)}</p><p>📚 You learn: ${escapeHtml(s.theirSkill)}</p><p style="font-weight:bold;margin:10px 0">📅 ${escapeHtml(s.scheduled_time)}</p><p>📍 ${escapeHtml(s.location)}</p>${s.notes ? `<p>📝 ${escapeHtml(s.notes)}</p>` : ''}<div class="skill-footer"><button class="btn-success" onclick="completeSession(${s.id})">✓ Mark Completed</button></div></div>`; 
+            html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">👥 With ${escapeHtml(s.partner.username)}</div><span class="badge ${s.status}">${s.status}</span></div><p>🤝 You teach: ${escapeHtml(s.yourSkill)}</p><p>📚 You learn: ${escapeHtml(s.theirSkill)}</p><p style="font-weight:bold;margin:10px 0; color:#667eea">📅 ${escapeHtml(s.scheduled_time)}</p>${s.location ? `<p>📍 ${escapeHtml(s.location)}</p>` : ''}${s.notes ? `<p>📝 ${escapeHtml(s.notes)}</p>` : ''}<div class="skill-footer"><button class="btn-success" onclick="completeSession(${s.id})">✓ Mark as Completed</button></div></div>`; 
         });
         html += '</div>'; 
         container.innerHTML = html;
@@ -732,27 +763,27 @@
     }
     
     function completeSession(id) { 
-        showMessage('Session completed! Reputation increased.','success'); 
+        showMessage('✓ Session completed! Reputation points added. Keep learning!','success'); 
     }
     
     function renderDebtTab() {
         const user = getCurrentUser();
         const given = user?.givenHours || 0, received = user?.receivedHours || 0, balance = given - received;
         const container = document.getElementById('debtTab');
-        container.innerHTML = `<div class="form-container"><h2>💰 Debt Tracking</h2><div style="text-align:center;padding:20px;background:#f8f9fa;border-radius:15px;margin-bottom:20px"><h3>Your Balance</h3><p style="font-size:48px;font-weight:bold;color:${balance>=0?'#51cf66':'#ff6b6b'}">${balance} hours</p><p>${balance>=0?'✨ You\'ve taught more than learned':'📚 You\'ve learned more than taught'}</p></div><div><p>✅ Hours taught: ${given}</p><p>📖 Hours learned: ${received}</p><p>🤝 Total trades: ${user?.completedTrades||0}</p><p>⭐ Reputation: ${user?.reputation||0}</p></div></div>`;
+        container.innerHTML = `<div class="form-container"><h2>💰 Skill Debt Tracker</h2><div style="text-align:center;padding:20px;background:#f8f9fa;border-radius:15px;margin-bottom:20px"><h3>Your Balance</h3><p style="font-size:48px;font-weight:bold;color:${balance>=0?'#51cf66':'#ff6b6b'}">${balance} hours</p><p>${balance>=0?'✨ You\'ve taught more than you\'ve learned! 🌟':'📚 You\'ve learned more than you\'ve taught — keep sharing!'}</p></div><div style="background:white; border-radius:15px; padding:15px"><p style="margin:10px 0">✅ Hours taught: ${given}</p><p style="margin:10px 0">📖 Hours learned: ${received}</p><p style="margin:10px 0">🤝 Total completed trades: ${user?.completedTrades||0}</p><p style="margin:10px 0">⭐ Reputation score: ${user?.reputation||0}/100</p></div><p style="margin-top:15px; font-size:12px; color:#666; text-align:center">💡 Each completed trade increases your reputation!</p></div>`;
     }
     
     function renderAddSkillTab() {
         const container = document.getElementById('addSkillTab');
-        container.innerHTML = `<div class="form-container"><h3>Add New Skill</h3><div class="form-group"><input id="newSkillTitle" placeholder="Skill Title *"></div><div class="form-group"><select id="newSkillCat"><option value="">Select Category</option><option>Programming</option><option>Music</option><option>Language</option><option>Fitness</option><option>Art</option><option>Other</option></select></div><div class="form-group"><textarea id="newSkillDesc" rows="3" placeholder="Description"></textarea></div><div style="display:flex; gap:10px"><button class="btn-primary" onclick="addNewSkillSubmit()">Add Skill</button><button class="btn-primary" onclick="switchTabManual('swipe')">Cancel</button></div></div>`;
+        container.innerHTML = `<div class="form-container"><h3>✨ Add a Skill You Can Teach</h3><p style="margin-bottom:20px; color:#666">Share your knowledge with the community!</p><div class="form-group"><input id="newSkillTitle" placeholder="Skill Title * (e.g., Python, Guitar, Cooking)"></div><div class="form-group"><select id="newSkillCat"><option value="">Select Category *</option><option>Programming</option><option>Music</option><option>Language</option><option>Fitness</option><option>Art</option><option>Business</option><option>Other</option></select></div><div class="form-group"><textarea id="newSkillDesc" rows="3" placeholder="Description - what will students learn?"></textarea></div><div style="display:flex; gap:10px"><button class="btn-primary" onclick="addNewSkillSubmit()">➕ Add Skill</button><button class="btn-primary" onclick="switchTabManual('swipe')" style="background:#999">Cancel</button></div></div>`;
     }
     
     function addNewSkillSubmit() {
-        const title = document.getElementById('newSkillTitle')?.value;
+        const title = document.getElementById('newSkillTitle')?.value.trim();
         const cat = document.getElementById('newSkillCat')?.value;
-        if(!title || !cat) { showMessage('Title & category required','error'); return; }
+        if(!title || !cat) { showMessage('Please fill in title and category','error'); return; }
         const user = getCurrentUser();
-        const newSkill = { id: Date.now().toString(), title, category: cat, description: document.getElementById('newSkillDesc')?.value || 'No description' };
+        const newSkill = { id: Date.now().toString(), title: title, category: cat, description: document.getElementById('newSkillDesc')?.value.trim() || 'No description provided' };
         user.userSkills = user.userSkills || [];
         user.userSkills.push(newSkill);
         const allUsers = loadUsers();
@@ -760,7 +791,7 @@
         if(index !== -1) allUsers[index] = user;
         saveUsers(allUsers);
         setCurrentUser(user);
-        showMessage(`"${title}" added! Now others can discover your skill.`,'success');
+        showMessage(`✓ "${title}" added! Now others can discover your skill and request to learn from you.`,'success');
         refreshAllUserData();
         switchTabManual('swipe');
     }
@@ -819,12 +850,19 @@
         }
     }
     
+    function logout() {
+        setCurrentUser(null);
+        // Don't clear all localStorage, just remove the current user session
+        showMessage('Logged out successfully', 'success');
+        location.reload();
+    }
+    
     function initAuthUI() {
         const user = getCurrentUser();
         if(user) {
             document.getElementById('mainTabs').style.display = 'flex';
             document.getElementById('authButton').innerText = `Logout (${user.username})`;
-            document.getElementById('authButton').onclick = () => { setCurrentUser(null); localStorage.clear(); location.reload(); };
+            document.getElementById('authButton').onclick = logout;
             loadUserData(user.id);
             refreshAvailableSkills();
             refreshCounters();
@@ -838,12 +876,15 @@
     }
     
     function showAuthModal() {
-        const modalHtml = `<div class="auth-overlay" id="authOverlay"><div class="auth-card"><h2>📚 iTeachU</h2><p>Join the skill barter community</p><div id="authForm"><div class="form-group"><input type="text" id="authUsername" placeholder="Username"></div><div class="form-group"><input type="email" id="authEmail" placeholder="Email"></div><div class="form-group"><input type="password" id="authPassword" placeholder="Password"></div><button class="btn-primary" id="authActionBtn">Sign Up</button><p><span id="toggleAuthText" class="toggle-auth">Already have an account? Login</span></p></div></div></div>`;
+        const modalHtml = `<div class="auth-overlay" id="authOverlay"><div class="auth-card"><h2>📚 Welcome to iTeachU</h2><p>Learn skills. Teach skills. Build community.</p><div id="authForm"><div class="form-group"><input type="text" id="authUsername" placeholder="Username"></div><div class="form-group"><input type="email" id="authEmail" placeholder="Email"></div><div class="form-group"><input type="password" id="authPassword" placeholder="Password"></div><button class="btn-primary" id="authActionBtn">Sign Up</button><p><span id="toggleAuthText" class="toggle-auth">Already have an account? Login</span></p><hr><p style="font-size:12px; color:#888">Demo accounts: sarah@example.com / pass123 | mike@example.com / pass123 | emma@example.com / pass123</p></div></div></div>`;
         document.getElementById('modalContainer').innerHTML = modalHtml;
         let isLogin = false;
         const btn = document.getElementById('authActionBtn');
         const toggle = document.getElementById('toggleAuthText');
-        const updateForm = () => { btn.innerText = isLogin ? 'Login' : 'Sign Up'; toggle.innerText = isLogin ? "Need an account? Sign up" : "Already have an account? Login"; };
+        const updateForm = () => { 
+            btn.innerText = isLogin ? 'Login' : 'Sign Up'; 
+            toggle.innerText = isLogin ? "Need an account? Sign up" : "Already have an account? Login"; 
+        };
         updateForm();
         btn.onclick = () => {
             const username = document.getElementById('authUsername').value.trim();
@@ -852,19 +893,36 @@
             let users = loadUsers();
             if(isLogin) {
                 const found = users.find(u => (u.email === email || u.username === username) && u.password === pwd);
-                if(found) { setCurrentUser(found); closeModal(); location.reload(); }
-                else showMessage("Invalid credentials", "error");
+                if(found) { 
+                    setCurrentUser(found); 
+                    closeModal(); 
+                    location.reload(); 
+                } else showMessage("Invalid email/password", "error");
             } else {
                 if(!username || !email || !pwd) { showMessage("All fields required","error"); return; }
-                if(users.find(u=>u.email===email)) { showMessage("Email exists","error"); return; }
-                const newUser = { id: "u"+Date.now(), username, email, password: pwd, reputation: 10, completedTrades: 0, givenHours: 0, receivedHours: 0, userSkills: [] };
-                users.push(newUser); saveUsers(users); setCurrentUser(newUser); closeModal(); location.reload();
+                if(users.find(u=>u.email===email)) { showMessage("Email already exists","error"); return; }
+                const newUser = { 
+                    id: "u"+Date.now(), 
+                    username: username, 
+                    email: email, 
+                    password: pwd, 
+                    reputation: 10, 
+                    completedTrades: 0, 
+                    givenHours: 0, 
+                    receivedHours: 0, 
+                    userSkills: [] 
+                };
+                users.push(newUser); 
+                saveUsers(users); 
+                setCurrentUser(newUser); 
+                closeModal(); 
+                location.reload();
             }
         };
         toggle.onclick = () => { isLogin = !isLogin; updateForm(); };
     }
     
-    // Make functions global
+    // Make functions global for HTML onclick
     window.handlePass = handlePass; 
     window.handleSwipe = handleSwipe; 
     window.confirmMatch = confirmMatch; 
