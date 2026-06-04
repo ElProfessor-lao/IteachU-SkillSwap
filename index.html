@@ -391,22 +391,17 @@
 <div id="messageContainer"></div><div id="modalContainer"></div>
 
 <script>
-    // ------------------- PRODUCTION STORAGE (localStorage + users) -------------------
     // Storage keys
     const STORAGE_USERS = "iteachu_users";
     const STORAGE_CURRENT_USER = "iteachu_current_user";
     
-    // Helper: load all users
     function loadUsers() {
         const raw = localStorage.getItem(STORAGE_USERS);
         if (!raw) {
-            // seed initial demo users + default skills
             const defaultUsers = [
-                { id: "u1", username: "Sarah", email: "sarah@example.com", password: "pass123", reputation: 38, completedTrades: 8, balance: 2, givenHours: 12, receivedHours: 10, userSkills: [{ id: "s1", title: "Guitar", category: "Music", description: "Acoustic guitar lessons for beginners" }] },
-                { id: "u2", username: "Mike", email: "mike@example.com", password: "pass123", reputation: 25, completedTrades: 5, balance: -1, givenHours: 6, receivedHours: 7, userSkills: [{ id: "s2", title: "Spanish", category: "Language", description: "Conversational Spanish" }] },
-                { id: "u3", username: "Emma", email: "emma@example.com", password: "pass123", reputation: 52, completedTrades: 12, balance: 3, givenHours: 18, receivedHours: 15, userSkills: [{ id: "s3", title: "Yoga", category: "Fitness", description: "Beginner yoga classes" }] },
-                { id: "u4", username: "David", email: "david@example.com", password: "pass123", reputation: 44, completedTrades: 9, balance: 1, givenHours: 11, receivedHours: 10, userSkills: [{ id: "s4", title: "Photography", category: "Art", description: "DSLR basics and composition" }] },
-                { id: "u5", username: "Lisa", email: "lisa@example.com", password: "pass123", reputation: 31, completedTrades: 6, balance: -2, givenHours: 5, receivedHours: 7, userSkills: [{ id: "s5", title: "Cooking", category: "Other", description: "Italian and Asian cuisine" }] }
+                { id: "u1", username: "Sarah", email: "sarah@example.com", password: "pass123", reputation: 38, completedTrades: 8, givenHours: 12, receivedHours: 10, userSkills: [{ id: "s1", title: "Guitar", category: "Music", description: "Acoustic guitar lessons for beginners" }] },
+                { id: "u2", username: "Mike", email: "mike@example.com", password: "pass123", reputation: 25, completedTrades: 5, givenHours: 6, receivedHours: 7, userSkills: [{ id: "s2", title: "Spanish", category: "Language", description: "Conversational Spanish" }] },
+                { id: "u3", username: "Emma", email: "emma@example.com", password: "pass123", reputation: 52, completedTrades: 12, givenHours: 18, receivedHours: 15, userSkills: [{ id: "s3", title: "Yoga", category: "Fitness", description: "Beginner yoga classes" }] }
             ];
             localStorage.setItem(STORAGE_USERS, JSON.stringify(defaultUsers));
             return defaultUsers;
@@ -431,10 +426,13 @@
         localStorage.setItem(STORAGE_CURRENT_USER, JSON.stringify({ id: user.id, username: user.username }));
     }
     
-    // Global state for matches, sessions, messages (per user)
-    let matchesStore = [];     // { id, status, partnerId, yourSkillObj, theirSkillObj, is_sender }
+    // Global state
+    let matchesStore = [];
     let sessionsStore = [];
-    let messagesStore = {};    // key: matchId -> array
+    let messagesStore = {};
+    let availableSkillsCache = [];
+    let currentSwipeIndex = 0;
+    let selectedMatch = null;
     
     function loadUserData(userId) {
         const keyMatches = `iteachu_matches_${userId}`;
@@ -442,35 +440,7 @@
         const keyMessages = `iteachu_msgs_${userId}`;
         matchesStore = JSON.parse(localStorage.getItem(keyMatches) || '[]');
         sessionsStore = JSON.parse(localStorage.getItem(keySessions) || '[]');
-        const msgsRaw = localStorage.getItem(keyMessages);
-        messagesStore = msgsRaw ? JSON.parse(msgsRaw) : {};
-        // seed sample matches if empty for logged in user (demo friendly)
-        if (matchesStore.length === 0 && userId) {
-            const users = loadUsers();
-            const current = users.find(u => u.id === userId);
-            if (current && current.userSkills.length) {
-                const others = users.filter(u => u.id !== userId);
-                if (others.length) {
-                    const samplePartner = others[0];
-                    const samplePartnerSkill = samplePartner.userSkills[0];
-                    if (samplePartnerSkill && current.userSkills[0]) {
-                        matchesStore.push({
-                            id: Date.now(),
-                            status: 'pending',
-                            partnerId: samplePartner.id,
-                            partnerUsername: samplePartner.username,
-                            partnerEmail: samplePartner.email,
-                            partnerPhone: "+1 555-123-4567",
-                            partnerReputation: samplePartner.reputation,
-                            yourSkill: current.userSkills[0],
-                            theirSkill: samplePartnerSkill,
-                            is_sender: false
-                        });
-                        saveUserData(userId);
-                    }
-                }
-            }
-        }
+        messagesStore = JSON.parse(localStorage.getItem(keyMessages) || '{}');
     }
     
     function saveUserData(userId) {
@@ -479,27 +449,47 @@
         localStorage.setItem(`iteachu_msgs_${userId}`, JSON.stringify(messagesStore));
     }
     
-    // Helper to generate available skills from all other users
+    // Get all skills from other users
     function getAvailableSkills(currentUserId, allUsers) {
         const others = allUsers.filter(u => u.id !== currentUserId);
         const skills = [];
         others.forEach(user => {
             (user.userSkills || []).forEach(skill => {
-                skills.push({
-                    id: `${user.id}_${skill.id}`,
-                    title: skill.title,
-                    category: skill.category,
-                    description: skill.description,
-                    user: { username: user.username, reputation: user.reputation, userId: user.id, email: user.email, phone: "+1 555-000-0000" }
-                });
+                // Don't show skills that already have a pending outgoing request from current user
+                const alreadyRequested = matchesStore.some(m => 
+                    m.is_sender === true && 
+                    m.status === 'pending' && 
+                    m.partnerId === user.id && 
+                    m.theirSkillId === skill.id
+                );
+                if (!alreadyRequested) {
+                    skills.push({
+                        id: `${user.id}_${skill.id}`,
+                        skillId: skill.id,
+                        title: skill.title,
+                        category: skill.category,
+                        description: skill.description,
+                        user: { 
+                            username: user.username, 
+                            reputation: user.reputation, 
+                            userId: user.id, 
+                            email: user.email,
+                            phone: "+1 555-000-0000"
+                        }
+                    });
+                }
             });
         });
         return skills;
     }
     
-    // UI update
-    let currentSwipeIndex = 0, availableSkillsCache = [];
-    let selectedMatch = null;
+    function refreshAvailableSkills() {
+        const user = getCurrentUser();
+        if (user) {
+            const allUsers = loadUsers();
+            availableSkillsCache = getAvailableSkills(user.id, allUsers);
+        }
+    }
     
     function showMessage(msg, type='success') {
         const container = document.getElementById('messageContainer');
@@ -522,21 +512,30 @@
             return;
         }
         if (!availableSkillsCache.length) {
-            container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h3>✨ No skills available</h3><p>Check back later or invite friends!</p></div></div>`;
+            container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h3>✨ No skills available</h3><p>Other users haven't added skills yet. Check back later!</p></div></div>`;
             return;
         }
         const skill = availableSkillsCache[currentSwipeIndex % availableSkillsCache.length];
-        container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h2 style="margin-bottom:15px">${escapeHtml(skill.title)}</h2><span class="skill-category">${escapeHtml(skill.category)}</span><p style="margin-top:20px">${escapeHtml(skill.description)}</p><div style="margin-top:20px; padding-top:20px; border-top:1px solid rgba(0,0,0,0.1)"><p>👤 ${escapeHtml(skill.user.username)}</p><p>⭐ ${skill.user.reputation} rep</p></div></div><div class="swipe-actions"><button class="swipe-btn no" onclick="handlePass()">👎 Pass</button><button class="swipe-btn yes" onclick="handleSwipe('${skill.id}')">👍 Interested</button></div></div>`;
+        container.innerHTML = `<div class="swipe-container"><div class="swipe-card"><h2 style="margin-bottom:15px">${escapeHtml(skill.title)}</h2><span class="skill-category">${escapeHtml(skill.category)}</span><p style="margin-top:20px">${escapeHtml(skill.description)}</p><div style="margin-top:20px; padding-top:20px; border-top:1px solid rgba(0,0,0,0.1)"><p>👤 Offered by: ${escapeHtml(skill.user.username)}</p><p>⭐ Reputation: ${skill.user.reputation}</p></div></div><div class="swipe-actions"><button class="swipe-btn no" onclick="handlePass()">👎 Pass</button><button class="swipe-btn yes" onclick="handleSwipe('${skill.id}')">👍 Interested</button></div></div>`;
     }
     
-    function handlePass() { currentSwipeIndex = (currentSwipeIndex + 1) % availableSkillsCache.length; renderSwipeTab(); }
+    function handlePass() { 
+        currentSwipeIndex = (currentSwipeIndex + 1) % availableSkillsCache.length; 
+        renderSwipeTab(); 
+    }
     
     function handleSwipe(skillId) {
         const skill = availableSkillsCache.find(s => s.id === skillId);
         if (!skill) return;
         const currentUser = getCurrentUser();
-        if (!currentUser || !currentUser.userSkills.length) { showMessage("Add a teaching skill first", "error"); return; }
-        const yourSkill = currentUser.userSkills[0]; // for simplicity use first skill
+        if (!currentUser || !currentUser.userSkills.length) { 
+            showMessage("Add a teaching skill first", "error"); 
+            return; 
+        }
+        
+        // Use the first skill the user has as their teaching skill
+        const yourSkill = currentUser.userSkills[0];
+        
         const newMatch = {
             id: Date.now(),
             status: 'pending',
@@ -546,15 +545,51 @@
             partnerPhone: skill.user.phone || "+1 555-000-0000",
             partnerReputation: skill.user.reputation,
             yourSkill: yourSkill,
+            yourSkillId: yourSkill.id,
             theirSkill: { title: skill.title, category: skill.category, description: skill.description },
+            theirSkillId: skill.skillId,
             is_sender: true
         };
+        
         matchesStore.push(newMatch);
         saveUserData(currentUser.id);
-        showMessage(`✓ Interest sent to ${skill.user.username}! They'll be notified.`, 'success');
+        
+        // Also add to the receiving user's matches (so they see pending request)
+        const allUsers = loadUsers();
+        const receiverUser = allUsers.find(u => u.id === skill.user.userId);
+        if (receiverUser) {
+            const receiverMatchesKey = `iteachu_matches_${receiverUser.id}`;
+            let receiverMatches = JSON.parse(localStorage.getItem(receiverMatchesKey) || '[]');
+            
+            // Check if already exists
+            const exists = receiverMatches.some(m => m.partnerId === currentUser.id && m.theirSkillId === yourSkill.id);
+            if (!exists) {
+                receiverMatches.push({
+                    id: newMatch.id,
+                    status: 'pending',
+                    partnerId: currentUser.id,
+                    partnerUsername: currentUser.username,
+                    partnerEmail: currentUser.email,
+                    partnerPhone: "+1 555-000-0000",
+                    partnerReputation: currentUser.reputation || 10,
+                    yourSkill: { title: skill.title, category: skill.category, description: skill.description },
+                    yourSkillId: skill.skillId,
+                    theirSkill: yourSkill,
+                    theirSkillId: yourSkill.id,
+                    is_sender: false
+                });
+                localStorage.setItem(receiverMatchesKey, JSON.stringify(receiverMatches));
+            }
+        }
+        
+        showMessage(`✓ Interest sent to ${skill.user.username}! They can accept in their Matches tab.`, 'success');
         currentSwipeIndex = (currentSwipeIndex + 1) % availableSkillsCache.length;
-        refreshAllUserData();
+        refreshAvailableSkills();
         renderSwipeTab();
+        if (document.querySelector('.tab.active')?.getAttribute('data-tab') === 'matches') {
+            renderMatchesTab();
+        }
+        refreshCounters();
     }
     
     function renderMatchesTab() {
@@ -562,28 +597,80 @@
         const pendingIncoming = matchesStore.filter(m => m.status === 'pending' && !m.is_sender);
         const pendingOutgoing = matchesStore.filter(m => m.status === 'pending' && m.is_sender);
         const confirmed = matchesStore.filter(m => m.status === 'confirmed');
-        if (matchesStore.length === 0) { container.innerHTML = `<div class="form-container"><h3 style="text-align:center">💕 No matches yet</h3><p style="text-align:center">Swipe on skills you want to learn!</p></div>`; return; }
+        
+        if (matchesStore.length === 0) { 
+            container.innerHTML = `<div class="form-container"><h3 style="text-align:center">💕 No matches yet</h3><p style="text-align:center">Swipe on skills you want to learn!</p></div>`; 
+            return; 
+        }
+        
         let html = '';
-        if(pendingIncoming.length) { html += `<h3 class="section-title" style="color:#ff9f43">📨 Pending Requests (${pendingIncoming.length})</h3><div class="cards-container">`; pendingIncoming.forEach(m => { html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Awaiting</span></div><p>${escapeHtml(m.partnerUsername)} wants to teach you ${escapeHtml(m.theirSkill.title)} for your ${escapeHtml(m.yourSkill.title)}</p><div class="skill-footer"><button class="btn-success" onclick="confirmMatch(${m.id})">✅ Accept</button><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; }); html+=`</div>`; }
-        if(pendingOutgoing.length) { html += `<h3 class="section-title" style="color:#667eea">📤 Sent Requests (${pendingOutgoing.length})</h3><div class="cards-container">`; pendingOutgoing.forEach(m => { html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Waiting</span></div><p>Request to learn from ${escapeHtml(m.partnerUsername)}</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; }); html+=`</div>`; }
-        if(confirmed.length) { html += `<h3 class="section-title" style="color:#51cf66">✅ Confirmed Matches (${confirmed.length})</h3><div class="cards-container">`; confirmed.forEach(m => { html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.yourSkill.title)} ⇄ ${escapeHtml(m.theirSkill.title)}</div><span class="badge confirmed">Confirmed</span></div><p>With ${escapeHtml(m.partnerUsername)} (⭐ ${m.partnerReputation})</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Chat</button><button class="btn-warning" onclick="openSchedule(${m.id})">📅 Schedule</button></div></div>`; }); html+=`</div>`; }
+        
+        if(pendingIncoming.length) { 
+            html += `<h3 class="section-title" style="color:#ff9f43">📨 Incoming Requests (${pendingIncoming.length})</h3><div class="cards-container">`; 
+            pendingIncoming.forEach(m => { 
+                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Awaiting Your Response</span></div><p><strong>${escapeHtml(m.partnerUsername)}</strong> wants to learn your <strong>${escapeHtml(m.yourSkill.title)}</strong> in exchange for teaching you <strong>${escapeHtml(m.theirSkill.title)}</strong></p><div style="margin-top:10px; padding:10px; background:#f8f9fa; border-radius:10px"><p>⭐ Partner reputation: ${m.partnerReputation}</p><p>📧 ${escapeHtml(m.partnerEmail)}</p></div><div class="skill-footer"><button class="btn-success" onclick="confirmMatch(${m.id})">✅ Accept Match</button><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; 
+            }); 
+            html+=`</div>`; 
+        }
+        
+        if(pendingOutgoing.length) { 
+            html += `<h3 class="section-title" style="color:#667eea">📤 Sent Requests (${pendingOutgoing.length})</h3><div class="cards-container">`; 
+            pendingOutgoing.forEach(m => { 
+                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.theirSkill.title)}</div><span class="badge pending">Waiting for Response</span></div><p>You want to learn ${escapeHtml(m.theirSkill.title)} from ${escapeHtml(m.partnerUsername)}</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Message</button></div></div>`; 
+            }); 
+            html+=`</div>`; 
+        }
+        
+        if(confirmed.length) { 
+            html += `<h3 class="section-title" style="color:#51cf66">✅ Confirmed Matches (${confirmed.length})</h3><div class="cards-container">`; 
+            confirmed.forEach(m => { 
+                html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">${escapeHtml(m.yourSkill.title)} ⇄ ${escapeHtml(m.theirSkill.title)}</div><span class="badge confirmed">Confirmed</span></div><p>With ${escapeHtml(m.partnerUsername)} (⭐ ${m.partnerReputation})</p><div class="skill-footer"><button class="btn-primary" onclick="openChat(${m.id})">💬 Chat</button><button class="btn-warning" onclick="openSchedule(${m.id})">📅 Schedule</button></div></div>`; 
+            }); 
+            html+=`</div>`; 
+        }
         container.innerHTML = html;
+        document.getElementById('matchCount').innerHTML = `(${matchesStore.length})`;
     }
     
     function confirmMatch(matchId) {
         const match = matchesStore.find(m => m.id === matchId);
-        if(match) { match.status = 'confirmed'; saveUserData(getCurrentUser().id); showMessage('Match confirmed! You can now schedule a session.','success'); renderMatchesTab(); refreshCounters(); }
+        if(match) { 
+            match.status = 'confirmed'; 
+            saveUserData(getCurrentUser().id);
+            
+            // Update the sender's match status as well
+            const allUsers = loadUsers();
+            const senderUser = allUsers.find(u => u.id === match.partnerId);
+            if (senderUser) {
+                const senderMatchesKey = `iteachu_matches_${senderUser.id}`;
+                let senderMatches = JSON.parse(localStorage.getItem(senderMatchesKey) || '[]');
+                const senderMatch = senderMatches.find(m => m.id === matchId);
+                if (senderMatch) {
+                    senderMatch.status = 'confirmed';
+                    localStorage.setItem(senderMatchesKey, JSON.stringify(senderMatches));
+                }
+            }
+            
+            showMessage('✓ Match confirmed! You can now schedule a session.','success'); 
+            renderMatchesTab(); 
+            refreshCounters(); 
+        }
     }
     
     function openChat(matchId) {
         selectedMatch = matchesStore.find(m => m.id === matchId);
         if(!selectedMatch) return;
         let msgs = messagesStore[matchId] || [];
+        
         function renderChatModalInner() {
-            let messagesHtml = ''; msgs.forEach(m => { messagesHtml += `<div class="message-bubble ${m.is_sent ? 'sent' : 'received'}"><div class="message-content">${escapeHtml(m.content)}</div><div style="font-size:10px; margin-top:4px; color:#888">${new Date(m.timestamp).toLocaleTimeString()}</div></div>`; });
+            let messagesHtml = ''; 
+            msgs.forEach(m => { 
+                messagesHtml += `<div class="message-bubble ${m.is_sent ? 'sent' : 'received'}"><div class="message-content">${escapeHtml(m.content)}</div><div style="font-size:10px; margin-top:4px; color:#888">${new Date(m.timestamp).toLocaleTimeString()}</div></div>`; 
+            });
             const modalHtml = `<div class="modal" onclick="closeModal()"><div class="modal-content" onclick="event.stopPropagation()"><h2>💬 Chat with ${escapeHtml(selectedMatch.partnerUsername)}</h2><div class="chat-container"><div class="chat-messages" id="chatMessages">${messagesHtml}<div id="chatEnd"></div></div><div class="chat-input"><input type="text" id="chatInput" placeholder="Type a message..." onkeypress="if(event.key==='Enter') sendChatMessageCurrent()"><button class="btn-primary" onclick="sendChatMessageCurrent()">Send</button></div></div><button class="btn-primary" onclick="closeModal()" style="background:#999; margin-top:15px">Close</button></div></div>`;
             document.getElementById('modalContainer').innerHTML = modalHtml;
             setTimeout(() => document.getElementById('chatEnd')?.scrollIntoView({ behavior: 'smooth' }), 50);
+            
             window.sendChatMessageCurrent = function() {
                 const input = document.getElementById('chatInput');
                 if(input && input.value.trim()) {
@@ -611,7 +698,16 @@
         if(!date || !time) { showMessage('Please select date & time','error'); return; }
         const match = matchesStore.find(m => m.id === matchId);
         if(match) {
-            const newSession = { id: Date.now(), status: 'scheduled', partner: { username: match.partnerUsername }, yourSkill: match.yourSkill.title, theirSkill: match.theirSkill.title, scheduled_time: `${date} at ${time}`, location: document.getElementById('scheduleLocation')?.value || 'TBD', notes: document.getElementById('scheduleNotes')?.value || '' };
+            const newSession = { 
+                id: Date.now(), 
+                status: 'scheduled', 
+                partner: { username: match.partnerUsername }, 
+                yourSkill: match.yourSkill.title, 
+                theirSkill: match.theirSkill.title, 
+                scheduled_time: `${date} at ${time}`, 
+                location: document.getElementById('scheduleLocation')?.value || 'TBD', 
+                notes: document.getElementById('scheduleNotes')?.value || '' 
+            };
             sessionsStore.push(newSession);
             saveUserData(getCurrentUser().id);
             showMessage('Session scheduled!','success');
@@ -622,23 +718,33 @@
     
     function renderSessionsTab() {
         const container = document.getElementById('sessionsTab');
-        if(!sessionsStore.length) { container.innerHTML = `<div class="form-container"><h3>📅 No sessions yet</h3><p>Schedule from matches!</p></div>`; return; }
-        let html = '<h2>Your Sessions</h2><div class="cards-container">';
-        sessionsStore.forEach(s => { html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">With ${escapeHtml(s.partner.username)}</div><span class="badge ${s.status}">${s.status}</span></div><p>🤝 You teach: ${escapeHtml(s.yourSkill)}</p><p>📚 Learn: ${escapeHtml(s.theirSkill)}</p><p style="font-weight:bold;margin:10px 0">📅 ${escapeHtml(s.scheduled_time)}</p><p>📍 ${escapeHtml(s.location)}</p><div class="skill-footer"><button class="btn-success" onclick="completeSession(${s.id})">✓ Mark Completed</button></div></div>`; });
-        html += '</div>'; container.innerHTML = html;
+        if(!sessionsStore.length) { 
+            container.innerHTML = `<div class="form-container"><h3>📅 No sessions yet</h3><p>Schedule from confirmed matches!</p></div>`; 
+            return; 
+        }
+        let html = '<h2 class="section-title">Your Sessions</h2><div class="cards-container">';
+        sessionsStore.forEach(s => { 
+            html += `<div class="skill-card"><div class="skill-header"><div class="skill-title">With ${escapeHtml(s.partner.username)}</div><span class="badge ${s.status}">${s.status}</span></div><p>🤝 You teach: ${escapeHtml(s.yourSkill)}</p><p>📚 You learn: ${escapeHtml(s.theirSkill)}</p><p style="font-weight:bold;margin:10px 0">📅 ${escapeHtml(s.scheduled_time)}</p><p>📍 ${escapeHtml(s.location)}</p>${s.notes ? `<p>📝 ${escapeHtml(s.notes)}</p>` : ''}<div class="skill-footer"><button class="btn-success" onclick="completeSession(${s.id})">✓ Mark Completed</button></div></div>`; 
+        });
+        html += '</div>'; 
+        container.innerHTML = html;
+        document.getElementById('sessionCount').innerHTML = `(${sessionsStore.length})`;
     }
-    function completeSession(id) { showMessage('Session completed! Reputation increased.','success'); }
+    
+    function completeSession(id) { 
+        showMessage('Session completed! Reputation increased.','success'); 
+    }
     
     function renderDebtTab() {
         const user = getCurrentUser();
         const given = user?.givenHours || 0, received = user?.receivedHours || 0, balance = given - received;
         const container = document.getElementById('debtTab');
-        container.innerHTML = `<div class="form-container"><h2>💰 Debt Tracking</h2><div style="text-align:center;padding:20px;background:#f8f9fa;border-radius:15px;margin-bottom:20px"><h3>Your Balance</h3><p style="font-size:48px;font-weight:bold;color:${balance>=0?'#51cf66':'#ff6b6b'}">${balance} hours</p><p>${balance>=0?'✨ You\'ve taught more':'📚 You\'ve learned more'}</p></div><div><p>✅ Hours taught: ${given}</p><p>📖 Hours learned: ${received}</p><p>🤝 Trades: ${user?.completedTrades||0}</p><p>⭐ Reputation: ${user?.reputation||0}</p></div></div>`;
+        container.innerHTML = `<div class="form-container"><h2>💰 Debt Tracking</h2><div style="text-align:center;padding:20px;background:#f8f9fa;border-radius:15px;margin-bottom:20px"><h3>Your Balance</h3><p style="font-size:48px;font-weight:bold;color:${balance>=0?'#51cf66':'#ff6b6b'}">${balance} hours</p><p>${balance>=0?'✨ You\'ve taught more than learned':'📚 You\'ve learned more than taught'}</p></div><div><p>✅ Hours taught: ${given}</p><p>📖 Hours learned: ${received}</p><p>🤝 Total trades: ${user?.completedTrades||0}</p><p>⭐ Reputation: ${user?.reputation||0}</p></div></div>`;
     }
     
     function renderAddSkillTab() {
         const container = document.getElementById('addSkillTab');
-        container.innerHTML = `<div class="form-container"><h3>Add New Skill</h3><div class="form-group"><input id="newSkillTitle" placeholder="Skill Title *"></div><div class="form-group"><select id="newSkillCat"><option value="">Category</option><option>Programming</option><option>Music</option><option>Language</option><option>Fitness</option><option>Art</option><option>Other</option></select></div><div class="form-group"><textarea id="newSkillDesc" rows="3" placeholder="Description"></textarea></div><div style="display:flex; gap:10px"><button class="btn-primary" onclick="addNewSkillSubmit()">Add Skill</button><button class="btn-primary" onclick="switchTabManual('swipe')">Cancel</button></div></div>`;
+        container.innerHTML = `<div class="form-container"><h3>Add New Skill</h3><div class="form-group"><input id="newSkillTitle" placeholder="Skill Title *"></div><div class="form-group"><select id="newSkillCat"><option value="">Select Category</option><option>Programming</option><option>Music</option><option>Language</option><option>Fitness</option><option>Art</option><option>Other</option></select></div><div class="form-group"><textarea id="newSkillDesc" rows="3" placeholder="Description"></textarea></div><div style="display:flex; gap:10px"><button class="btn-primary" onclick="addNewSkillSubmit()">Add Skill</button><button class="btn-primary" onclick="switchTabManual('swipe')">Cancel</button></div></div>`;
     }
     
     function addNewSkillSubmit() {
@@ -654,35 +760,63 @@
         if(index !== -1) allUsers[index] = user;
         saveUsers(allUsers);
         setCurrentUser(user);
-        showMessage(`"${title}" added!`,'success');
+        showMessage(`"${title}" added! Now others can discover your skill.`,'success');
         refreshAllUserData();
         switchTabManual('swipe');
     }
     
     function refreshAllUserData() {
         const user = getCurrentUser();
-        if(user) { loadUserData(user.id); availableSkillsCache = getAvailableSkills(user.id, loadUsers()); }
-        if(document.querySelector('.tab.active')?.getAttribute('data-tab') === 'swipe') renderSwipeTab();
-        if(document.querySelector('.tab.active')?.getAttribute('data-tab') === 'matches') renderMatchesTab();
-        if(document.querySelector('.tab.active')?.getAttribute('data-tab') === 'sessions') renderSessionsTab();
-        if(document.querySelector('.tab.active')?.getAttribute('data-tab') === 'debt') renderDebtTab();
-        if(document.querySelector('.tab.active')?.getAttribute('data-tab') === 'addskill') renderAddSkillTab();
+        if(user) { 
+            loadUserData(user.id); 
+            refreshAvailableSkills();
+        }
+        const activeTab = document.querySelector('.tab.active')?.getAttribute('data-tab');
+        if(activeTab === 'swipe') renderSwipeTab();
+        else if(activeTab === 'matches') renderMatchesTab();
+        else if(activeTab === 'sessions') renderSessionsTab();
+        else if(activeTab === 'debt') renderDebtTab();
+        else if(activeTab === 'addskill') renderAddSkillTab();
         refreshCounters();
     }
-    function refreshCounters() { document.getElementById('matchCount').innerHTML = `(${matchesStore.length})`; document.getElementById('sessionCount').innerHTML = `(${sessionsStore.length})`; const user=getCurrentUser(); if(user) document.getElementById('reputationDisplay').innerHTML = `⭐ ${user.reputation} | ${user.completedTrades||0} trades`; }
+    
+    function refreshCounters() { 
+        document.getElementById('matchCount').innerHTML = `(${matchesStore.length})`; 
+        document.getElementById('sessionCount').innerHTML = `(${sessionsStore.length})`; 
+        const user=getCurrentUser(); 
+        if(user) document.getElementById('reputationDisplay').innerHTML = `⭐ ${user.reputation} | ${user.completedTrades||0} trades`; 
+    }
     
     function switchTabManual(tabName) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         const targetBtn = Array.from(document.querySelectorAll('.tab')).find(b => b.getAttribute('data-tab') === tabName);
         if(targetBtn) targetBtn.classList.add('active');
-        document.getElementById('swipeTab').classList.add('hidden'); document.getElementById('matchesTab').classList.add('hidden');
-        document.getElementById('sessionsTab').classList.add('hidden'); document.getElementById('debtTab').classList.add('hidden');
+        document.getElementById('swipeTab').classList.add('hidden'); 
+        document.getElementById('matchesTab').classList.add('hidden');
+        document.getElementById('sessionsTab').classList.add('hidden'); 
+        document.getElementById('debtTab').classList.add('hidden');
         document.getElementById('addSkillTab').classList.add('hidden');
-        if(tabName === 'swipe') { document.getElementById('swipeTab').classList.remove('hidden'); renderSwipeTab(); }
-        else if(tabName === 'matches') { document.getElementById('matchesTab').classList.remove('hidden'); renderMatchesTab(); }
-        else if(tabName === 'sessions') { document.getElementById('sessionsTab').classList.remove('hidden'); renderSessionsTab(); }
-        else if(tabName === 'debt') { document.getElementById('debtTab').classList.remove('hidden'); renderDebtTab(); }
-        else if(tabName === 'addskill') { document.getElementById('addSkillTab').classList.remove('hidden'); renderAddSkillTab(); }
+        
+        if(tabName === 'swipe') { 
+            document.getElementById('swipeTab').classList.remove('hidden'); 
+            renderSwipeTab(); 
+        }
+        else if(tabName === 'matches') { 
+            document.getElementById('matchesTab').classList.remove('hidden'); 
+            renderMatchesTab(); 
+        }
+        else if(tabName === 'sessions') { 
+            document.getElementById('sessionsTab').classList.remove('hidden'); 
+            renderSessionsTab(); 
+        }
+        else if(tabName === 'debt') { 
+            document.getElementById('debtTab').classList.remove('hidden'); 
+            renderDebtTab(); 
+        }
+        else if(tabName === 'addskill') { 
+            document.getElementById('addSkillTab').classList.remove('hidden'); 
+            renderAddSkillTab(); 
+        }
     }
     
     function initAuthUI() {
@@ -690,9 +824,9 @@
         if(user) {
             document.getElementById('mainTabs').style.display = 'flex';
             document.getElementById('authButton').innerText = `Logout (${user.username})`;
-            document.getElementById('authButton').onclick = () => { setCurrentUser(null); location.reload(); };
+            document.getElementById('authButton').onclick = () => { setCurrentUser(null); localStorage.clear(); location.reload(); };
             loadUserData(user.id);
-            availableSkillsCache = getAvailableSkills(user.id, loadUsers());
+            refreshAvailableSkills();
             refreshCounters();
             switchTabManual('swipe');
         } else {
@@ -723,15 +857,32 @@
             } else {
                 if(!username || !email || !pwd) { showMessage("All fields required","error"); return; }
                 if(users.find(u=>u.email===email)) { showMessage("Email exists","error"); return; }
-                const newUser = { id: "u"+Date.now(), username, email, password: pwd, reputation: 10, completedTrades: 0, balance: 0, givenHours: 0, receivedHours: 0, userSkills: [] };
+                const newUser = { id: "u"+Date.now(), username, email, password: pwd, reputation: 10, completedTrades: 0, givenHours: 0, receivedHours: 0, userSkills: [] };
                 users.push(newUser); saveUsers(users); setCurrentUser(newUser); closeModal(); location.reload();
             }
         };
         toggle.onclick = () => { isLogin = !isLogin; updateForm(); };
     }
     
-    document.querySelectorAll('.tab').forEach(tab => { tab.addEventListener('click', (e) => { switchTabManual(tab.getAttribute('data-tab')); }); });
-    window.handlePass = handlePass; window.handleSwipe = handleSwipe; window.confirmMatch = confirmMatch; window.openChat = openChat; window.openSchedule = openSchedule; window.completeSession = completeSession; window.scheduleSessionFromModal = scheduleSessionFromModal; window.addNewSkillSubmit = addNewSkillSubmit; window.switchTabManual = switchTabManual; window.showAuthModal = showAuthModal;
+    // Make functions global
+    window.handlePass = handlePass; 
+    window.handleSwipe = handleSwipe; 
+    window.confirmMatch = confirmMatch; 
+    window.openChat = openChat; 
+    window.openSchedule = openSchedule; 
+    window.completeSession = completeSession; 
+    window.scheduleSessionFromModal = scheduleSessionFromModal; 
+    window.addNewSkillSubmit = addNewSkillSubmit; 
+    window.switchTabManual = switchTabManual; 
+    window.showAuthModal = showAuthModal;
+    
+    // Attach tab listeners
+    document.querySelectorAll('.tab').forEach(tab => { 
+        tab.addEventListener('click', (e) => { 
+            switchTabManual(tab.getAttribute('data-tab')); 
+        }); 
+    });
+    
     initAuthUI();
 </script>
 </body>
